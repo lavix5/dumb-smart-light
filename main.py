@@ -23,27 +23,25 @@ try:
 except KeyboardInterrupt:
     machine.reset()
 
-# Setting time to CET/CEST depending of the time of year
+ntptime.settime()
+CEST_diff=2 # UTC +2
+CET_diff=1 # UTC +1
+timezone_diff=0
 
-def localtime1(sec = None):
-    from time import time, mktime, gmtime   
-    if sec == None: sec = time()
-    year = gmtime(sec)[0]
-    # summer - from last Sunday of March
-    summer = list(gmtime(mktime((year, 3, 31, 1, 0, 0, None, None))))
+def summer_winter_time(t):
+    global timezone_diff
+    year=time.localtime()[0]
+    summer=list(time.localtime(time.mktime((year, 3, 31, 1, 0, 0, None, None))))
     summer[2] -= (summer[6] + 1) % 7
-    # winter - from last Sunday of October
-    winter = list(gmtime(mktime((year, 10, 31, 1, 0, 0, None, None))))
+    winter=list(time.localtime(time.mktime((year, 10, 31, 1, 0, 0, None, None))))
     winter[2] -= (winter[6] + 1) % 7
     summer[6:8] = winter[6:8] = (None, None)
-    sec += 3600 # UTC+1
-    if (mktime(summer) < sec and sec < mktime(winter)):
-        sec += 3600
-    return gmtime(sec)
+    if time.mktime(summer) < time.time() and time.mktime(winter) > time.time():
+        timezone_diff=CEST_diff
+    else:
+        timezone_diff=CET_diff
 
-
-localtime1()
-
+summer_winter_time(None)
 
 import array
 import rp2
@@ -105,26 +103,32 @@ def time_check(t):
     global started_brightness_up_timer
     global started_brightness_down_timer
     global morning_light
-    if time.localtime()[3] > 7 and time.localtime()[3] < 12 and started_brightness_up_timer == 0:
-        brightness_up_timer=machine.Timer(period=30000, callback=brightness_up)
+    global started_summer_winter_timer
+    #time.licaltime() in GMT
+    if time.localtime()[3] + timezone_diff > 6 and time.localtime()[3] + timezone_diff < 12 and started_brightness_up_timer == 0:
+        brightness_up_timer=machine.Timer(period=15000, callback=brightness_up)
         started_brightness_up_timer=1
         started_brightness_down_timer=0
-    if time.localtime()[3] > 20 and started_brightness_down_timer == 0:
+    if time.localtime()[3] + timezone_diff > 20 and started_brightness_down_timer == 0:
         brightness_down_timer=machine.Timer(period=60000, callback=brightness_down)
         started_brightness_down_timer=1
         started_brightness_up_timer=0
-    if morning_light == 1 and time.localtime()[3] > 12:
+    if morning_light == 1 and time.localtime()[3] + timezone_diff > 12:
         morning_light = 0
         f=open("morning_light","w")
         f.write(str(morning_light))
         f.close()
+    if time.localtime()[3] < 1 and started_summer_winter_timer == 0:
+        started_summer_winter_timer = 1
+        summer_winter_timer=machine.Timer(period=86400000, callback=summer_winter_time)
+        
         
 def brightness_up(t):
     global brightness
     global brightness_up_timer
     global light_state
     global morning_light
-    if brightness > 0.5:
+    if brightness > 0.8:
         machine.Timer.deinit(brightness_up_timer)
     else:
         brightness=brightness+0.01
@@ -134,7 +138,6 @@ def brightness_up(t):
         if morning_light == 1 and light_state == 1:
             pixels_fill(WARM_WHITE)
             pixels_show()
-
     if morning_light == 0 and light_state == 0:
         pixels_fill(WARM_WHITE)
         pixels_show()
@@ -151,8 +154,13 @@ def brightness_up(t):
         
 def brightness_down(t):
     global brightness
-    if brightness > 0.05:
+    if brightness > 0.05 and brightness < 0.51:
         brightness=brightness-0.01
+        f=open("brightness","w")
+        f.write(str(brightness))
+        f.close()
+    elif brightness > 0.5:
+        brightness=0.5
         f=open("brightness","w")
         f.write(str(brightness))
         f.close()
@@ -184,8 +192,7 @@ def button_press_handler(button):
             f.close()
     time.sleep(0.1)
     button.irq(handler=button_press_handler)
-
-
+  
         
 WARM_WHITE = (255,220,200)
 BLACK = (0,0,0)
