@@ -151,6 +151,8 @@ def brightness_up(t):
         f.close()
 
         
+def sync_time(t):
+    ntptime.settime()
         
 def brightness_down(t):
     global brightness
@@ -203,6 +205,7 @@ button_pin = 1
 button = machine.Pin(button_pin, machine.Pin.IN, machine.Pin.PULL_UP)
 button_state = button.value()
 button.irq(trigger=machine.Pin.IRQ_FALLING, handler=button_press_handler) # interrupt to turn lights on/off with physical button
+sync_time_timer=machine.Timer(period=86400, callback=sync_time)
 
 f=open("light_state","r")
 light_state=int(f.read())
