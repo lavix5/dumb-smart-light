@@ -3,9 +3,8 @@ import socket
 import time
 import machine
 import ntptime
-
-ssid = 'SSID'
-password = 'password'
+import array
+import rp2
 
 def connect():
     #Connect to WLAN
@@ -18,16 +17,6 @@ def connect():
     ip = wlan.ifconfig()[0]
     print(f'Connected on {ip}')
     
-try:
-    connect()
-except KeyboardInterrupt:
-    machine.reset()
-
-ntptime.settime()
-CEST_diff=2 # UTC +2
-CET_diff=1 # UTC +1
-timezone_diff=0
-
 def summer_winter_time(t):
     global timezone_diff
     year=time.localtime()[0]
@@ -40,18 +29,6 @@ def summer_winter_time(t):
         timezone_diff=CEST_diff
     else:
         timezone_diff=CET_diff
-
-summer_winter_time(None)
-
-import array
-import rp2
-
-# Configure the number of WS2812 LEDs.
-NUM_LEDS = 16
-PIN_NUM = 0
-f=open("brightness", "r")
-brightness=float(f.read())
-f.close()
 
 @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True, pull_thresh=24)
 def ws2812():
@@ -67,21 +44,12 @@ def ws2812():
     nop()                   .side(0)    [T2 - 1]
     wrap()
 
-# Create the StateMachine with the ws2812 program, outputting on pin
-sm = rp2.StateMachine(0, ws2812, freq=8_000_000, sideset_base=machine.Pin(PIN_NUM))
-
-# Start the StateMachine, it will wait for data on its FIFO.
-sm.active(1)
-
-# Display a pattern on the LEDs via an array of LED RGB values.
-ar = array.array("I", [0 for _ in range(NUM_LEDS)])
-
 def pixels_show():
     dimmer_ar = array.array("I", [0 for _ in range(NUM_LEDS)])
     for i,c in enumerate(ar):
-        r = int(((c >> 8) & 0xFF) * brightness)
-        g = int(((c >> 16) & 0xFF) * brightness)
-        b = int((c & 0xFF) * brightness)
+        r = int(((c >> 8) & 0xFF) * brightness/100)
+        g = int(((c >> 16) & 0xFF) * brightness/100)
+        b = int((c & 0xFF) * brightness/100)
         dimmer_ar[i] = (g<<16) + (r<<8) + b
     sm.put(dimmer_ar, 8)
     time.sleep_ms(10)
@@ -92,32 +60,40 @@ def pixels_set(i, color):
 def pixels_fill(color):
     for i in range(len(ar)):
         pixels_set(i, color)
-
-started_brightness_up_timer = 0
-started_brightness_down_timer = 0
-f=open("morning_light","r")
-morning_light=int(f.read())
-f.close()
+        
 def time_check(t):
     global brightness_up_timer
     global started_brightness_up_timer
-    global started_brightness_down_timer
     global morning_light
     global started_summer_winter_timer
-    #time.licaltime() in GMT
-    if time.localtime()[3] + timezone_diff > 6 and time.localtime()[3] + timezone_diff < 12 and started_brightness_up_timer == 0:
-        brightness_up_timer=machine.Timer(period=15000, callback=brightness_up)
+    global light_state
+    #time.localtime() in GMT
+    if time.localtime()[3] + timezone_diff == 5 and time.localtime()[4] == 45 and started_brightness_up_timer == 0: #turn on time
+        brightness_up_timer=machine.Timer(period=8000, callback=brightness_up) 
         started_brightness_up_timer=1
         started_brightness_down_timer=0
-    if time.localtime()[3] + timezone_diff > 20 and started_brightness_down_timer == 0:
-        brightness_down_timer=machine.Timer(period=60000, callback=brightness_down)
-        started_brightness_down_timer=1
-        started_brightness_up_timer=0
-    if morning_light == 1 and time.localtime()[3] + timezone_diff > 12:
-        morning_light = 0
+        light_state=1
+        morning_light=1
         f=open("morning_light","w")
         f.write(str(morning_light))
         f.close()
+    if time.localtime()[3] + timezone_diff == 6 and time.localtime()[4] == 40 and light_state == 1: #turn of time
+        machine.Timer.deinit(brightness_up_timer)
+        pixels_fill(BLACK)
+        pixels_show()
+        light_state=0
+        f=open("light_state", "w")
+        f.write("0")
+        f.close()
+        brightness=1
+        f=open("brightness","w")
+        f.write(str(brightness))
+        f.close()
+        started_brigntness_up_timer=0
+        morning_light=0
+        f=open("morning_light","w")
+        f.write(str(morning_light))
+        f.close()      
     if time.localtime()[3] < 1 and started_summer_winter_timer == 0:
         started_summer_winter_timer = 1
         summer_winter_timer=machine.Timer(period=86400000, callback=summer_winter_time)
@@ -128,18 +104,18 @@ def brightness_up(t):
     global brightness_up_timer
     global light_state
     global morning_light
-    if brightness > 0.8:
+    if brightness > 95:
         machine.Timer.deinit(brightness_up_timer)
     else:
-        brightness=brightness+0.01
+        brightness=brightness+1 #brightness step
         f=open("brightness","w")
         f.write(str(brightness))
         f.close()
         if morning_light == 1 and light_state == 1:
-            pixels_fill(WARM_WHITE)
+            pixels_fill(WHITE)
             pixels_show()
     if morning_light == 0 and light_state == 0:
-        pixels_fill(WARM_WHITE)
+        pixels_fill(WHITE)
         pixels_show()
         light_state = 1
         f=open("light_state", "w")
@@ -150,67 +126,60 @@ def brightness_up(t):
         f.write(str(morning_light))
         f.close()
 
-        
 def sync_time(t):
     ntptime.settime()
-        
-def brightness_down(t):
-    global brightness
-    if brightness > 0.05 and brightness < 0.51:
-        brightness=brightness-0.01
-        f=open("brightness","w")
-        f.write(str(brightness))
-        f.close()
-    elif brightness > 0.5:
-        brightness=0.5
-        f=open("brightness","w")
-        f.write(str(brightness))
-        f.close()
-    else:
-        machine.Timer.deinit(brightness_up_timer)
-    if light_state == 1:
-        pixels_fill(WARM_WHITE)
-        pixels_show()
 
+ssid = 'ssid'
+password = 'password'
 
-def button_press_handler(button):
-    global light_state
-    button.irq(handler=None)
-    
-    if button.value() == 0 and button_state == 1:
-        if light_state == 0:
-            pixels_fill(WARM_WHITE)
-            pixels_show()
-            light_state=1
-            f=open("light_state", "w")
-            f.write("1")
-            f.close()
-        else:
-            pixels_fill(BLACK)
-            pixels_show()
-            light_state=0
-            f=open("light_state", "w")
-            f.write("0")
-            f.close()
-    time.sleep(0.1)
-    button.irq(handler=button_press_handler)
-  
-        
-WARM_WHITE = (255,220,200)
-BLACK = (0,0,0)
+CEST_diff=2 # UTC +2
+CET_diff=1 # UTC +1
+timezone_diff=0
 
-general_timer=machine.Timer(period=5000, callback=time_check)
+# Configure the number of WS2812 LEDs.
+NUM_LEDS = 16
+PIN_NUM = 0
 
-button_pin = 1
-button = machine.Pin(button_pin, machine.Pin.IN, machine.Pin.PULL_UP)
-button_state = button.value()
-button.irq(trigger=machine.Pin.IRQ_FALLING, handler=button_press_handler) # interrupt to turn lights on/off with physical button
-sync_time_timer=machine.Timer(period=86400, callback=sync_time)
+# Create the StateMachine with the ws2812 program, outputting on pin
+sm = rp2.StateMachine(0, ws2812, freq=8_000_000, sideset_base=machine.Pin(PIN_NUM))
 
+# Start the StateMachine, it will wait for data on its FIFO.
+sm.active(1)
+
+# Display a pattern on the LEDs via an array of LED RGB values.
+ar = array.array("I", [0 for _ in range(NUM_LEDS)])
+
+started_brightness_up_timer = 0
+
+f=open("brightness", "r")
+brightness=int(f.read())
+f.close()
+f=open("morning_light","r")
+morning_light=int(f.read())
+f.close()
 f=open("light_state","r")
 light_state=int(f.read())
 f.close()
 
-if light_state == 1:
-    pixels_fill(WARM_WHITE)
-    pixels_show()
+WHITE = (255,255,255)
+BLACK = (0,0,0)
+
+try:
+    connect()
+except KeyboardInterrupt:
+    machine.reset()
+
+ntptime.settime()
+summer_winter_time(None)
+general_timer=machine.Timer(period=5000, callback=time_check)
+sync_time_timer=machine.Timer(period=86400000, callback=sync_time)
+
+from machine import Pin
+led=Pin("LED", Pin.OUT)
+led.on()
+time.sleep(0.5)
+led.off()
+time.sleep(0.5)
+led.on()
+time.sleep(0.5)
+led.off()
